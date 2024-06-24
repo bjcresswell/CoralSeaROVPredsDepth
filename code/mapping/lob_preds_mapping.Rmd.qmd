@@ -1,0 +1,195 @@
+---
+title: " Mapping LOB Overview"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    #fig_height: 
+    fig_width: 140/25.4
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+## Created: 3rd Oct 2023 BJC ##
+
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+#rm(list=ls()) # Clear out environment if necessary
+```
+
+
+
+# Load required packages
+```{r packages, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+source('code/packages.R')
+library(sf)
+library(rio)
+library(ggsn)
+```
+
+
+# Load data
+
+## Load Australia map object from ggplot's world map
+Note: could use whole world map but the file will be 50 x smaller if we filter now (0.1 vs ~5MB), and thus quicker to plot and work with
+```{r world-map-load}
+aus <- map_data("world") %>% 
+  filter(region == 'Australia')
+```
+
+## Load in shape files 
+Need to have the .shp and the .shx file in the same folder
+### CS
+```{r load-shp-sf, message=FALSE, warning=FALSE}
+lob_dryreef <- read_sf("data/3dgbr_geomorph/shape/coralsea_dryreef.shp") |> 
+    filter(NAME == "Osprey Reef" |
+           NAME == "Bougainville Reef" |
+           NAME == "Lihou Reef")
+
+lob_reef <- read_sf("data/3dgbr_geomorph/shape/coralsea_reef.shp") |> 
+    filter(NAME == "Osprey Reef" |
+           NAME == "Bougainville Reef" |
+           NAME == "Lihou Reef")
+
+```
+
+
+### GBR
+```{r load-shp-sf2, message=FALSE, warning=FALSE}
+gbr_feats <- read_sf("data/3dgbr_geomorph/shape/gbr_features.shp")
+gbr_shelf <- read_sf("data/3dgbr_geomorph/shape/gbr_shelf.shp") # Don't need to filter as the file is already as small as it can be
+```
+
+
+### Create reef labels
+```{r}
+reef_labels <- 
+  lob_predsum %>% 
+  select(Reef_1, Site, Site_lat, Site_long) %>% 
+  unique() %>% 
+  group_by(Reef_1) %>% 
+  slice_max(Site_lat, n = 1) |> 
+  select(!Site)
+```
+
+
+```{r}
+reef_labels <- read_excel("data/reef_labels.xlsx")
+```
+
+
+
+### Town labels
+```{r}
+town_labels <- 
+  tibble(Town = c("Cairns", "Townsville"),
+         Lat = c(-16.93, -19.29), 
+         Long = c(145.77, 146.77))      
+
+
+```
+
+
+
+## Basic map trimmed down to central and northern Coral Sea (i.e. just keeping in LOB)
+- Could specify detailed aes here but will save that step for the final maps to keep this early code easy to follow
+```{r}
+australia_map <- 
+  aus %>% 
+  ggplot() +
+  geom_sf(data = gbr_feats, fill = 'grey60', colour = "transparent", size = .001) +
+  geom_polygon(aes(x = long, y = lat, group = group), fill = "grey40", colour = 'black', linewidth = 0.3) +
+  coord_sf(ylim = c(-19, -10), xlim = c(142.5, 152)) 
+
+australia_map
+```
+
+If file download required see mapping_ROV.Rmd
+
+
+
+## LOB combined overview general area
+```{r fig.width= 150/25.4, fig.height=150/25.4}
+overview_map <- 
+australia_map +
+  geom_segment(data = reef_labels, mapping = aes(x = Site_long, xend = Label_long, y = Site_lat, yend = Label_lat), size = 0.25) +
+  geom_label(data = reef_labels, mapping = aes(x = Label_long, y = Label_lat, label = Reef_1), family = "Arial", size = 4, fill = "white", colour = "black", label.size = NA) +
+  geom_sf(data = lob_dryreef, fill = 'gray60', size = 0.1) +
+  geom_sf(data = lob_reef, fill = 'grey', colour = 'black', size = 0.1) +
+  geom_text_repel(data = town_labels, mapping = aes(x = Long, y = Lat, label = Town), nudge_x = -0.5) +
+  geom_point(data = town_labels, mapping = aes(x = Long, y = Lat), pch = 21, fill = "red", colour = "black", size = 3) +
+  coord_sf(ylim = c(-20, -10.2), xlim = c(142.8, 153)) +
+  theme(axis.title = element_blank(), 
+        axis.text = element_text(colour = "black", size = 10),
+        #axis.ticks = element_blank(),
+        #panel.grid = element_line(colour = "#ECEFF1"),
+        panel.border = element_rect(colour = "black", fill = "transparent"),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "transparent", colour = "transparent"))
+
+overview_map
+```
+
+
+# Add globe and scale bar
+```{r}
+sourceRmd::sourceRmd("code/make_globe.Rmd")
+```
+
+
+```{r fig.width= 140/25.4, fig.height=140/25.4}
+lob_map_midrange <- 
+  overview_map +
+  #annotation_custom(ggplotGrob(globe), xmin = 141, xmax = 147, ymin = -20, ymax = -17) +
+  scalebar(x.min = 140, x.max = 145, y.min = -20, y.max = -19, dist = 100, dist_unit = "km", transform = TRUE, model = "WGS84", # Geo properties - the xmax and ymax don't do anything
+          # location = 'bottomright', anchor = c(x = 149, y = -18.1),                                # Position of bar
+           family = "Arial", st.size = 3, st.dist = 0.3,                                            # Text properties
+           border.size = 0.3, height = 0.2, st.bottom = TRUE) +                                     # Bar properties
+  cowplot::draw_image('data/North_Pointer.jpg', x = 152, y = -11.5, scale = 1.4, hjust = 0.5) +
+  geom_rect(aes( xmin = 144.9, xmax = 145.3, ymin = -21.45, ymax = -21), linewidth = 0.01, color = "red", fill = NA) +
+    guides(fill = "none", shape = "none") 
+lob_map_midrange
+```
+
+
+
+
+
+
+```{r}
+ggsave(filename = "output/lob_map_midrange.pdf", plot = lob_map_midrange, height = 140, width = 140, device = cairo_pdf, units = "mm", dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
