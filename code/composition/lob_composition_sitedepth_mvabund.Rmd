@@ -1,0 +1,179 @@
+---
+title: "Predator assemblage composition - mvabund @ site_depth level"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+#rm(list=ls()) # Clear out environment if necessary
+```
+
+
+# Prerequisites
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source("code/packages.R")
+source("code/extras.R")
+load("data/Rdata/lob_predsum.Rdata")
+load("data/Rdata/lob_preds.Rdata")
+```
+
+
+## Store list of predictors we'll be interested in at the end.
+```{r}
+env_vars_sitedepth <- 
+  lob_preds |> 
+  select(Reef_1, Site, Depth, Site_Depth) |> 
+  distinct() #|> 
+#  right_join(transect_abun_matrix)
+```
+
+
+
+## Summarise species accounts by depth bin and site:
+```{r}
+sitedepth_speccount <- 
+  lob_preds |> 
+  group_by(Site_Depth, Binomial) |> # Just the grouping variable (single) that we are interested in here
+  dplyr::summarise(Count=sum(Number)) |> 
+  ungroup()
+```
+
+
+
+
+## Convert into "wide" format diversity matrix
+```{r}
+sitedepth_matrix <- 
+  sitedepth_speccount |> 
+  pivot_wider(names_from = Binomial, values_from=Count, values_fill = 0) |> 
+  dplyr::select(!`NA`) |>  # Get rid of column where the sp name ('Binomial') had been NA
+  ungroup() 
+```
+
+
+## Turn into mvabund object
+```{r}
+#predabund <- mvabund(site_matrix[-1]) 
+predabund_SDdepth <- mvabund(sitedepth_matrix[-1]) 
+```
+
+## Check out mean-variance relationship - should be 1-1 as we are working with count data
+```{r}
+par(predabund_SDdepth)
+meanvar <- meanvar.plot(predabund_SDdepth) 
+```
+
+# EDA - can do a basic overview of abundance ~ predictor variable
+Won't work in Rmd!! Need to copy to script or console
+```{r}
+#plot(predabund ~ env_vars_sitedepth$Depth)
+```
+
+
+#  Model fitting
+## Notes:
+- mvabund cannot handle random factors (yet) so a resampling approach used instead (see below)
+- There is a pattern in the Poisson model residuals (not surprising, given the ZI in these data) so have commented out
+
+```{r}
+# Neg binom model options
+depth_SD_mod <- manyglm(predabund_SDdepth ~ env_vars_sitedepth$Depth, family="negative_binomial")
+```
+
+
+
+# Model validation 
+# In mvabund the only way to check this is plotting residuals vs fitted values
+```{r}
+plot.manyglm(depth_SD_mod, which = 1) # 
+plot.manyglm(depth_SD_mod, which = 2) # 
+plot.manyglm(depth_SD_mod, which = 3) # 
+```
+
+Residuals looking ok
+
+
+
+
+# Summaries
+```{r}
+#depth_SD_mvasum <- summary(depth_SD_mod)
+#save(depth_SD_mvasum, file = "data/Rdata/mod_data/depth_SD_mvasum.Rdata") # 
+load(file = "data/Rdata/mod_data/depth_SD_mvasum.Rdata") # 
+depth_SD_mvasum
+```
+
+
+# Pairwise comparisons
+
+```{r}
+#depth_SD_aov <- anova.manyglm(depth_SD_mod, test = 'LR', pairwise.comp = env_vars_sitedepth$Depth,  p.uni="adjusted")
+```
+
+# These anovas are very slow to run -save results for use later
+```{r}
+#save(depth_SD_aov, file = "data/Rdata/mod_data/mva_depth_SD_aov.rda") # 
+```
+
+# Reload if/when required
+```{r}
+load(file = "data/Rdata/mod_data/mva_depth_SD_aov.rda")
+```
+
+# Results
+
+# Multivariate contrasts
+```{r}
+depth_SD_multi_contrasts <- 
+  depth_SD_aov$pairwise.comp.table  |> 
+              rownames() |> 
+              as_tibble() |> 
+              mutate(Contrast = value, .keep = "unused") |> 
+  bind_cols(depth_SD_aov$pairwise.comp.table  |> 
+  as_tibble())
+
+depth_SD_multi_contrasts
+```
+
+# Univariate contrasts
+```{r}
+depth_SD_uni_contrasts <- 
+  t(depth_SD_aov$uni.test) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Binomial") %>% 
+  rename(LRT = `env_vars_sitedepth$Depth`) %>% 
+  select(!`(Intercept)`) %>% 
+  left_join(  
+  t(depth_SD_aov$uni.p) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Binomial") %>% 
+  rename(P = `env_vars_sitedepth$Depth`) %>% 
+  select(!`(Intercept)`)) %>% 
+  mutate(Binomial = str_replace(Binomial, "\\.", " ")) %>% 
+  arrange(-LRT)
+
+depth_SD_uni_contrasts
+```
+
+

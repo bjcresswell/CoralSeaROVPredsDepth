@@ -1,0 +1,262 @@
+---
+title: "Predator assemblage composition - species correlation in gllvm"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+#rm(list=ls()) # Clear out environment if necessary
+```
+
+
+# Prerequisites
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source("code/packages.R")
+source("code/helper_functions.R")
+source("code/extras.R")
+load("data/Rdata/predsum.Rdata")
+load("data/Rdata/preds.Rdata")
+load("data/Rdata/rmetadata.Rdata")
+#source("code/diversity/depth_site_diversity.R")
+library(gllvm)
+```
+
+## Store list of predictors for model (mainly interested in Region for this analysis)
+```{r}
+env_vars_gllvm <- 
+  preds |> 
+  select(Region, Reef_1, Site, 
+         Depth, Site_Depth,
+         dCT, dGBR
+         ) |> 
+  distinct() |> 
+  as.data.frame()
+```
+
+
+## Summarise species accounts by depth bin and site:
+```{r}
+site_spec_gllvm <- 
+  preds |> 
+  group_by(Site_Depth, Binomial) |> # Just the grouping variable (single) that we are interested in here
+  dplyr::summarise(Count=sum(Number)) |> 
+  ungroup()
+```
+
+
+## Convert into "wide" format diversity matrix
+```{r}
+site_matrix_gllvm <- 
+  site_spec_gllvm |> 
+  pivot_wider(names_from = Binomial, values_from=Count, values_fill = 0) |> 
+  dplyr::select(!`NA`) |>  # Get rid of column where the sp name ('Binomial') had been NA
+  ungroup() 
+
+## And into mvabund object (works well with gllvm)
+predabund <- mvabund(site_matrix_gllvm[2:102]) 
+```
+
+
+
+# For this analysis we are interested in assemblage a) differences between region and also b) seeing if there are identifiable latent variables behind these and c) if any species occurance correlates
+# We don't know how many latent variables will best explain our data so we will try a few:
+```{r}
+criteria <- NULL # Create empty object to receive candidate models
+for(i in 1:5){
+  fiti <- gllvm(predabund, env_vars_gllvm, family = "negative.binomial", num.lv = i, sd.errors = FALSE,
+                formula = ~ Region, seed = 1234)
+  criteria[i] <- summary(fiti)$AICc
+  names(criteria)[i] = i
+}
+criteria
+```
+
+# So two latent variables best model
+
+# Run as specific model
+```{r}
+lvmod_region <- gllvm(predabund, env_vars_gllvm, family = "negative.binomial", num.lv = 2, sd.errors = TRUE,
+                 formula = ~ Region, seed = 1234)
+```
+
+
+# Check residuals
+
+```{r}
+plot(lvmod_region, which = 1)
+plot(lvmod_region, which = 2)
+plot(lvmod_region, which = 3)
+plot(lvmod_region, which = 4)
+plot(lvmod_region, which = 5)
+```
+
+
+# Look reasonable - can't see any patterns
+
+# Check summary - not that useful
+```{r}
+summary(lvmod_region)
+betas <- lvmod_region$TMBfn$par %>% as.matrix()
+```
+
+
+```{r}
+ordiplot(lvmod_region)
+coefplot(lvmod_region)
+```
+
+
+
+
+# gllvm is useful for finding any correlations between species occurrence
+
+## Extra libraries
+```{r}
+library(corrplot)
+library(gclus)
+```
+
+
+```{r}
+cr <- getResidualCor(lvmod_region)
+```
+
+
+
+# In built correlation matrix - looks horrible
+```{r}
+region_sp_corplot <- corrplot(cr[order.single(cr), order.single(cr)], diag = FALSE, type = "lower", 
+         method = "square", tl.cex = 0.5, tl.srt = 45, tl.col = "red")
+```
+
+
+# But we can extract the cor scores for plotting in ggplot
+```{r}
+sp_cors <- tibble(region_sp_corplot$corrPos) |> 
+  mutate_if(is.character, as.factor) |> 
+  mutate(xName = fct_reorder(xName, x),          # Need to reorder the sp names according to the numeric position
+         yName = fct_reorder(yName, y))          # For both axes
+```
+
+
+# If you need as a matrix
+```{r}
+sp_cor_matrix <- 
+  sp_cors %>% 
+  pivot_wider(names_from = yName, values_from = corr, id_cols = xName)
+```
+
+
+# We have 5460 combinations of possible correlations between our taxa and most of them are not very correlated
+## Filter out the taxa with the highest negative and positive correlations
+```{r}
+hicor_pos <- sp_cors %>% 
+  #slice_max(corr, n = 20) |> 
+  filter(corr > 0.8) |> 
+  rename(hicor = corr)
+
+hicor_neg <- sp_cors %>% 
+  #slice_min(corr, n = 20) |> 
+  filter(corr < -0.8) |> 
+  rename(hicor = corr)
+```
+
+
+# Combine
+```{r}
+sp_hicors <- bind_rows(hicor_neg, hicor_pos)
+```
+
+
+# And add in to sp_cors
+```{r}
+sp_cors1 <- 
+  sp_cors |> 
+  left_join(sp_hicors) |> 
+  mutate(xName1 = factor(if_else(is.na(hicor), "", xName), ordered = TRUE),
+         yName1 = factor(if_else(is.na(hicor), "", yName), ordered = TRUE)) |> 
+  mutate(xName1 = fct_reorder(xName1, x),          # Need to reorder the sp names according to the numeric position
+         yName1 = fct_reorder(yName1, y)) 
+```
+
+
+  
+  
+####
+
+```{r}
+ggplot(data = sp_cors1) +
+  geom_tile(aes(x = xName, y = yName, fill = corr)) +
+  #geom_tile(aes(x = xName1, y = yName1), fill = 'transparent') +
+  scale_fill_gradient2("Correlation", midpoint = 0, mid ="white", limits = c(-1, +1)) + 
+  #annotate()
+  annotate("text", x = -1, y = 67, label = "L. gibbus", fontface = "italic", hjust = 2) +
+  coord_cartesian(clip ="off") +
+  scale_y_discrete(breaks = sp_cors1$yName1, labels = sp_cors1$yName1) +
+  scale_x_discrete(expand = c(0, 0)) +
+  theme_bw() +
+  theme(plot.title = element_blank(), 
+        axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        #axis.text.y = element_blank(),
+        plot.margin = unit(c(1, 0, 0, 1), "cm"),           # Top, right, bottom, left
+        legend.title = element_text(colour="black", size = 9)) 
+
+```
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
