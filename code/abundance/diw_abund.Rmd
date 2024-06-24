@@ -1,0 +1,349 @@
+---
+title: "Lihou, Osprey and Bougainville abundance wrangling"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+#rm(list=ls()) # Clear out environment if necessary
+```
+
+
+# Load predator data, packages
+```{r message=FALSE, warning=FALSE, include=FALSE, fig.width = 150/25.4, fig.height = 90/25.4}
+source("code/packages.R")
+#source("code/wrangling/diw_rawdata.R")
+# Or
+#load('data/Rdata/lob_preds.Rdata')
+# Check data
+lob_preds
+# Distribution of response variable
+lob_preds %>% ggplot() +  
+  geom_histogram(aes(x=Number), binwidth = 1, color="black", fill="grey") +
+  scale_x_continuous("No. of predators")
+```
+Looks like a lot of zeros and definitely right skewed. Might need hurdle or ZI model later on
+
+## Let's check what our ranges are
+```{r}
+lob_preds %>% 
+  summarise_at(vars(Number), list(median = median, mean = mean, SD = sd, SE = std.error,
+                                  CI5 = ~quantile(., probs = 0.05), CI95 = ~quantile(., probs = 0.95), 
+                                  CI1 = ~quantile(., probs = 0.01), CI99 = ~quantile(., probs = 0.99), 
+                                  Q1 = ~quantile(., probs = 0.25), Q3=~quantile(., probs = 0.75)))
+```
+
+So the average number of preds observed per transect is around 1 (median and mean) with a fair bit of variability (SD is nearly double the mean)
+99% of observations are 12 or less, so we might round down these outliers to minimise their effect. 
+
+
+## Next we'll see how many observations this will affect:
+```{r}
+lob_preds  %>% filter(Number >12)
+```
+  
+
+8 observations - less than 1% of all the observations in the dataset. We can leave in, remove or round down. Note that 3/4 of these are from Bougainville and of these 90 are from the shallows. Worth noting for interpretation of results - schooling predators on Bougainville skewing results. Might do two versions of the analysis.
+
+
+## Summarise predator counts by T_ID (include all other vars of interest here)
+
+Can sort the outliers here if required
+
+```{r}
+lob_predsum <- 
+   lob_preds  %>% 
+   #filter(Number < 12) %>%                              # Filter out outliers if required
+   #mutate(across(Number, ~  ifelse(. > 12, 12, .))) %>% # Round down outliers if required
+   group_by(Reef_1, Reef_2, Site,                       # Grouping variables of reef and site - only going to need Reef_1 (overarching reef system)
+            Site_lat, Site_long,                         # Geographic variables. Don't think these will be that useful
+            dCT, dGBR, Region,                           # Distance from coral triangle, GBR and region (categorical) are all possible proxies for lat/long
+            Depth, Depth_m, Depth_bin, Depth_bin_meso,            # Can model depth as continuous or as a binned variable  
+            Reef_1_Area, Reef_size,                      # Same with reef area - as continuous or binned
+            Isol, IsolRank, Reef_100,                    # Isolation score is a continuous variable, rank is ordered, km2 of reef within 100km
+            Aspect_descriptive, Aspect_scale,             # Both of these are actually ordered categorical despite one appearing to be numeric
+            Temperature, Benthic_Complexity,             #
+            Situation, Habitat, Zone,
+            T_ID) %>%
+   summarise(No_Preds = sum(Number)) %>%  #
+   ungroup()
+```
+
+# Save if required
+```{r}
+#save(lob_predsum, file = 'data/Rdata/lob_predsum.Rdata')
+```
+
+
+# Checks
+
+# Total predator observations
+```{r}
+lob_predsum %>% summarise(Total_preds = sum(No_Preds))
+lob_preds %>% summarise(No_Preds = sum(Number)) 
+```
+
+
+# Transects per depth zone
+```{r}
+lob_predsum %$% 
+  summary(Depth)
+```
+
+## Transects per reef
+```{r}
+lob_predsum %>% 
+  group_by(Reef_1) %>% 
+  summarise(Transect_number = n())
+```
+
+
+Slightly unbalanced between reefs, but at least in the right order - the largest has the most transects and vice versa
+
+## How many sites?
+```{r}
+lob_predsum %>% 
+  select(Reef_1, Site) %>% 
+  distinct() %>% 
+  group_by(Reef_1) %>% 
+  summarise(No_sites = n())
+```
+
+
+
+## Sample size - by 10m depth bin
+```{r}
+lob_predsum %>% 
+  group_by(Depth_bin) %>% 
+  summarise(Transect_number = n())
+```
+
+## Sample size - by depth zone
+```{r}
+lob_predsum %>% 
+  group_by(Depth_bin_meso) %>% 
+  summarise(Transect_number = n())
+```
+
+
+
+
+## Predator abundance by reef
+
+### Not expecting any patterns here but worth a quick check
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  group_by(Reef_1) %>% 
+  summarise_at(vars(No_Preds), list(median = median, mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() +
+  geom_pointrange(aes(x = Reef_1, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+
+## Effect of depth?
+
+### As continuous
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  ggplot() + 
+  geom_point(aes(x = Depth_m, y = No_Preds)) +
+  geom_smooth(aes(x = Depth_m, y = No_Preds), method = "gam") +
+  theme_minimal() +
+  ylab("No of predators per transect") +
+  xlab("Depth (m)")
+```
+
+
+Too much noise....
+
+
+
+### 10m depth bins
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  group_by(Depth_bin) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Depth_bin, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Depth_bin, y = mean)) +
+  geom_line(aes(x = Depth_bin, y = mean, group = 1)) +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Depth (10m bins)")
+```
+
+
+# Or...
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  mutate(Depth_bin = fct_relevel(Depth_bin, rev)) %>% 
+  group_by(Reef_1, Depth_bin) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_point(aes(x = Reef_1, y = Depth_bin, colour = mean+(SE*2), fill = mean+(SE*2), group = mean+(SE*2), size = mean+(SE*2)), position = position_jitter(width = 0.1, height = 0, seed = 1)) +
+  geom_point(aes(x = Reef_1, y = Depth_bin, size = mean, group = 1), colour = "black", fill = "white", pch = 21, position = position_jitter(width = 0.1, height = 0, seed = 1)) +
+  theme_minimal() +
+  scale_radius(range = c(0, 15), name = "Abundance") +
+  scale_fill_gradient(guide = "legend",low = "white", high = "dodgerblue", name = "Abundance") +
+  scale_colour_gradient(guide = "legend", low = "white", high = "dodgerblue", name = "Abundance") +
+  scale_y_discrete(expand = c(0,1)) +
+  ylab("Depth (10m bins)") +
+  xlab("Reef")
+```
+
+
+
+
+
+### Photic zone bins
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  group_by(Depth) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Depth, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Depth, y = mean)) +
+  geom_line(aes(x = Depth, y = mean, group = 1)) +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Depth zone")
+```
+
+
+
+
+
+# Protection zone
+```{r fig.width = 170/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  group_by(Zone) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Zone, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Zone, y = mean)) +
+  geom_line(aes(x = Zone, y = mean)) +
+  theme_minimal() +
+  ylab("Mean no of predators per transect ± SE)") +
+  xlab("Zone")
+```
+
+
+
+
+
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  mutate(Depth_bin_meso = fct_relevel(Depth_bin_meso, rev)) %>% 
+  group_by(Depth_bin_meso, Reef_1) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_point(aes(x = Reef_1, y = Depth_bin_meso, colour = mean+(SE*2), fill = mean+(SE*2), group = mean+(SE*2), size = mean+(SE*2))) +
+  geom_point(aes(x = Reef_1, y = Depth_bin_meso, size = mean, group = 1), colour = "black", fill = "white", pch = 21) +
+  theme_minimal() +
+  scale_radius(range = c(0, 15), name = "Abundance") +
+  scale_fill_gradient(guide = "legend",low = "white", high = "dodgerblue", name = "Abundance") +
+  scale_colour_gradient(guide = "legend", low = "white", high = "dodgerblue", name = "Abundance") +
+  scale_y_discrete(expand = c(0,1)) +
+  ylab("Depth bin") +
+  xlab("Reef")
+```
+
+
+## Benthic complexity?
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  filter(Benthic_Complexity < 30) %>% 
+  mutate(Benthic_Complexity = factor(Benthic_Complexity, ordered = TRUE)) %>% 
+  group_by(Benthic_Complexity) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Benthic_Complexity, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Benthic_Complexity, y = mean)) +
+  geom_line(aes(x = Benthic_Complexity, y = mean, group = 1)) +
+  geom_smooth(aes(x = Benthic_Complexity, y = mean, group = 1), method = "loess") +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Benthic complexity score")
+```
+
+## Aspect?
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  mutate(Aspect = factor(Aspect_scale, ordered = TRUE)) %>% 
+  group_by(Aspect) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Aspect, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Aspect, y = mean)) +
+  geom_line(aes(x = Aspect, y = mean, group = 1)) +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Aspect score (0-5)")
+```
+# OR
+
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% 
+  group_by(Aspect_descriptive) %>% 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) %>% 
+  ggplot() + 
+  geom_pointrange(aes(x = Aspect_descriptive, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Aspect_descriptive, y = mean)) +
+  geom_line(aes(x = Aspect_descriptive, y = mean, group = 1)) +
+  geom_smooth(aes(x = Aspect_descriptive, y = mean, group = 1), method = "loess") +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Aspect type")
+```
+
+
+# Temp?
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum %>% ggplot() + 
+  geom_point(aes(x = Temperature, y = No_Preds)) +
+  geom_smooth(aes(x = Temperature, y = No_Preds, method = "glm")) +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, 12))
+
+```
+
+
+
+#
+
+
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum  %>%  
+  ggplot() +
+  geom_point(aes(x = Reef_1_Area, y = No_Preds)) +
+  geom_smooth(aes(x = Reef_1_Area, y = No_Preds), method = "glm") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0,12)) +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Reef size")
+```
+
+
