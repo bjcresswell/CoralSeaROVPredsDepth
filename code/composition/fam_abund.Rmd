@@ -1,0 +1,478 @@
+---
+title: "Predator assemblage composition using boral - Depth patterns on LOB @ transect level"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+#rm(list=ls()) # Clear out environment if necessary
+```
+
+
+# Prerequisites
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source("code/packages.R")
+source("code/extras.R")
+load("data/Rdata/lob_preds.Rdata")
+load("data/Rdata/lob_predsum.Rdata")
+```
+
+
+# Summarising family counts
+
+# Have to do this step separately for each reef?
+
+Lihou
+```{r}
+predfams_abund_Lihou <- 
+lob_preds  |>  
+  filter(Reef_1 == "Lihou") |> 
+  droplevels() |> 
+  group_by(Reef_1, Site, Depth, Family) |> 
+  summarise(Count =sum(Number, na.rm = TRUE)) |> 
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Site, Depth, Family) %>% 
+  mutate(Count = replace_na(Count, 0)) 
+```
+
+Osprey
+```{r}
+predfams_abund_Osprey <- 
+lob_preds  |> 
+  filter(Reef_1 == "Osprey") |> 
+  droplevels() |>   
+  group_by(Reef_1, Site, Depth, Family) |> 
+  summarise(Count =sum(Number, na.rm = TRUE)) |> 
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Site, Depth, Family) %>% 
+  mutate(Count = replace_na(Count, 0)) 
+```
+
+Bougainville
+```{r}
+predfams_abund_Bougainville <- 
+lob_preds  |>  
+  filter(Reef_1 == "Bougainville") |> 
+  droplevels() |>   
+  group_by(Reef_1, Site, Depth, Family) |> 
+  summarise(Count = sum(Number, na.rm = TRUE)) |> 
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Site, Depth, Family) %>% 
+  mutate(Count = replace_na(Count, 0)) 
+```
+
+
+# Bring together in 1DF - 660 combinations of site|depth ~ Family
+```{r}
+predfams_abund_1 <- 
+  predfams_abund_Bougainville |> 
+  bind_rows(predfams_abund_Osprey) |> 
+  bind_rows(predfams_abund_Lihou)
+```
+
+# Diversity matrix
+```{r}
+sitedepth_fammatrix_1 <- 
+  predfams_abund_1 |> 
+  pivot_wider(names_from = Family, values_from=Count, values_fill = 0) |> 
+  ungroup() 
+```
+
+
+# Environmental predictors
+```{r}
+env_vars_fam_1 <- 
+  sitedepth_fammatrix_1 |> 
+  select(!where(is.numeric))
+```
+
+
+# mvabund object - should be 17 wide (17 families)
+```{r}
+sitedepth_famabund_1 <- mvabund(sitedepth_fammatrix_1  |> 
+                                  select(where(is.numeric)))
+```
+
+
+# Alt way of summarising family counts - does not back fill 0s into missing site-depth combos (3 fewer)
+
+## Summarise family counts
+```{r}
+predfams_abund_2 <- 
+  lob_preds |> 
+  group_by(Reef_1, Site, Depth, Family) |> # Just the grouping variable (single) that we are interested in here
+  dplyr::summarise(Count=sum(Number)) |> 
+  ungroup()
+```
+
+## Diversity matrix
+```{r}
+sitedepth_fammatrix_2 <- 
+  predfams_abund_2 |> 
+  pivot_wider(names_from = Family, values_from=Count, values_fill = 0) |> 
+  dplyr::select(!`NA`) |>  # Get rid of column where the sp name ('Binomial') had been NA
+  ungroup() 
+```
+
+# Depth predictors
+```{r}
+env_vars_fam_2 <- 
+  sitedepth_fammatrix_2 |> 
+  select(!where(is.numeric))
+```
+
+# mvabund object - should be 17 wide (17 families)
+```{r}
+sitedepth_famabund_2 <- mvabund(sitedepth_fammatrix_2 |> 
+                                  select(where(is.numeric)))
+```
+
+
+## Mean-variance relationship
+```{r}
+par()
+meanvar.plot(sitedepth_famabund_1)
+meanvar.plot(sitedepth_famabund_2)
+```
+
+# Model summaries
+```{r}
+# Neg binom model options
+fam_mva_1 <- manyglm(sitedepth_famabund_1 ~ env_vars_fam_1$Depth, family="negative_binomial", )
+fam_mva_2 <- manyglm(sitedepth_famabund_2 ~ env_vars_fam_2$Depth, family="negative_binomial")
+```
+
+
+# Model validation 
+# In mvabund the only way to check this is plotting residuals vs fitted values
+```{r fig.width=300/25.4, fig.height=100/25.4}
+plot.manyglm(fam_mva_1, which = c(1,2)) # 
+plot.manyglm(fam_mva_2, which = c(1,2)) # 
+```
+
+# Summaries
+```{r}
+fam_mvasum <- summary(fam_mva_1)
+fam_mvasum
+```
+
+
+# Pairwise comparisons
+```{r}
+fam_mva_aov_1 <- anova.manyglm(fam_mva_1, test = 'LR', pairwise.comp = env_vars_fam_1$Depth,  p.uni="adjusted")
+```
+
+
+# Results
+
+# Multivariate contrasts
+```{r}
+fam_multi_contrasts_1 <- 
+  fam_mva_aov_1$pairwise.comp.table  |> 
+              rownames() |> 
+              as_tibble() |> 
+              mutate(Contrast = value, .keep = "unused") |> 
+  bind_cols(fam_mva_aov_1$pairwise.comp.table  |> 
+  as_tibble())
+
+fam_multi_contrasts_1
+```
+
+# Univariate contrasts
+```{r}
+fam_uni_contrasts_1 <- 
+  t(fam_mva_aov_1$uni.test) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Family") %>% 
+  rename(LRT = `env_vars_fam_1$Depth`) %>% 
+  select(!`(Intercept)`) %>% 
+  left_join(  
+  t(fam_mva_aov_1$uni.p) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Family") %>% 
+  rename(P = `env_vars_fam_1$Depth`) %>% 
+  select(!`(Intercept)`)) %>% 
+  arrange(-LRT)
+
+fam_uni_contrasts_1
+```
+
+
+
+# Extras
+
+# Predator family abundance (alt way)
+```{r}
+predfams_abund <- 
+  lob_preds  |>  
+  group_by(Reef_1, Site, Depth, Family) |> 
+  summarise(No_Preds =sum(Number, na.rm = TRUE)) |> 
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Depth, Family) %>% 
+  mutate(No_Preds = replace_na(No_Preds, 0))
+```
+
+
+# All families abundance summary (mean ±SE) over depth categories
+```{r fig.width=140/25.4, fig.height=87/25.4}
+predfams_abund_sum <- 
+lob_preds  |>  
+  group_by(Reef_1, Depth, Family) |> 
+  summarise(No_Preds =sum(Number, na.rm = TRUE)) |> 
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Depth, Family) %>% 
+  mutate(No_Preds = replace_na(No_Preds, 0)) |> 
+  group_by(Depth, Family) %>%
+  summarise(mean = mean(No_Preds, na.rm = TRUE),
+            sd = sd(No_Preds, na.rm = TRUE),
+            SE = std.error(No_Preds, na.rm = TRUE))  |> 
+  mutate(Family = fct_reorder(Family, -mean)) |> 
+  arrange(Family) |> 
+  ungroup()
+```
+
+
+# Plot - wide
+```{r fig.width=160/25.4, fig.height=90/25.4}
+predfams_abund_fig <- 
+predfams_abund_sum  |> 
+  ggplot(aes(x = Depth, y = mean, group = Family)) +
+  geom_line(aes()) +
+  geom_errorbar(aes(ymin = mean - SE, ymax = mean + SE), width = 0.15, size = 0.4, colour = "black", position = position_dodge(width = 1), show.legend = FALSE) +
+  geom_point(aes(shape = Depth, fill = Depth), colour = "black", size = 2, position = position_dodge(width = 1), show.legend = TRUE) +
+  scale_y_continuous(name = expression("Abundance (n.150m"^{2}~" ± SE)"), expand = c(0.1, 0.1)) +
+  scale_fill_manual(name = "Depth zone", values = c("lightskyblue", "dodgerblue3", "midnightblue"), 
+                    labels = c("Shallow\n(0-30m)", "Upper\n(31-60m)", "Lower\n(61-100m)")) +
+  scale_shape_manual(name = "Depth zone", values = c(24, 23, 25), 
+                     labels = c("Shallow\n(0-30m)", "Upper\n(31-60m)", "Lower\n(61-100m)")) +
+  scale_x_discrete(name = "Family") +
+  theme_bjc() + 
+  theme(legend.position = c(0.68, 0.06),
+        #legend.title = element_blank(),
+        legend.text = element_text(),
+        legend.direction = "horizontal",
+        axis.title.x = element_blank(),
+        strip.text = element_text(size = 9, family = "Arial", colour = "black"),
+        axis.text.x = element_blank(),
+        plot.background = element_rect(fill = "transparent", colour = "black")) +
+   guides(shape = guide_legend(override.aes = list(size = 4))) +
+   guides(fill = guide_legend(title.position = "top", title.hjust=0.5)) +
+   facet_wrap(~Family, scales = "free_y", strip.position = "bottom")
+
+predfams_abund_fig
+```
+# Save
+```{r}
+ggsave(filename = "output/family_depth_abun_fig.jpg", plot = predfams_abund_fig, width = 160, height = 99, device = "jpeg", units = "mm", dpi = 300)
+```
+
+
+# Plot - long
+```{r fig.width=110/25.4, fig.height=160/25.4}
+predfams_abund_fig_long <- 
+predfams_abund_sum  |> 
+  ggplot(aes(x = Depth, y = mean, group = Family)) +
+  geom_line(aes()) +
+  geom_errorbar(aes(ymin = mean - SE, ymax = mean + SE), width = 0.15, size = 0.4, colour = "black", position = position_dodge(width = 1), show.legend = FALSE) +
+  geom_point(aes(shape = Depth, fill = Depth), colour = "black", size = 2, position = position_dodge(width = 1), show.legend = TRUE) +
+  scale_y_continuous(name = expression("Abundance (n.150m"^{2}~" ± SE)"), expand = c(0.1, 0.1)) +
+  scale_fill_manual(name = "Depth zone", values = c("lightskyblue", "dodgerblue3", "midnightblue"), 
+                    labels = c("Shallow (0-30m)", "Upper (31-60m)", "Lower (61-100m)")) +
+  scale_shape_manual(name = "Depth zone", values = c(24, 23, 25), 
+                     labels = c("Shallow (0-30m)", "Upper (31-60m)", "Lower (61-100m)")) +
+  scale_x_discrete(name = "Family") +
+  theme_bjc() + 
+  theme(legend.position = c(0.82, 0.06),
+        legend.title = element_blank(),
+        legend.text = element_text(),
+        legend.direction = "vertical",
+        axis.title.x = element_blank(),
+        strip.text = element_text(size = 9, family = "Arial", colour = "black"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 9, family = "Arial", colour = "black"),
+        plot.background = element_rect(fill = "transparent", colour = "black")) +
+   guides(shape = guide_legend(override.aes = list(size = 3))) +
+   guides(fill = guide_legend(title.position = "top", title.hjust=0.5)) +
+   facet_wrap(~Family, scales = "free_y", strip.position = "bottom", nrow = 6)
+
+
+predfams_abund_fig_long
+```
+
+# Save
+```{r}
+ggsave(filename = "output/family_depth_abun_fig_long.jpg", plot = predfams_abund_fig_long, height = 160, width = 110, device = "jpeg", units = "mm", dpi = 300)
+```
+
+
+
+
+
+
+# As bar plots
+## Separate into two levels first - the "abundant" vs "rare"
+We'll call them top vs bottom
+
+```{r}
+top_predfams <- 
+lob_preds  |>  
+  group_by(Reef_1, Depth, Family) |> 
+  summarise(No_Preds =sum(Number, na.rm = TRUE)) |>  # All good - 514
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Depth, Family) %>% 
+  mutate(No_Preds = replace_na(No_Preds, 0)) |> 
+  group_by(Depth, Family) %>%
+  summarise(mean = mean(No_Preds, na.rm = TRUE),
+            sd = sd(No_Preds, na.rm = TRUE),
+            SE = std.error(No_Preds, na.rm = TRUE))  |> 
+  mutate(Family = fct_reorder(Family, -mean)) |> 
+  arrange(Family) %>% 
+  slice_head(n = 9)
+```
+
+
+```{r fig.width=140/25.4, fig.height=87/25.4}
+bottom_predfams <- 
+lob_preds  |>  
+  group_by(Reef_1, Depth, Family) |> 
+  summarise(No_Preds =sum(Number, na.rm = TRUE)) |>  # All good - 514
+  ungroup()  |> 
+  filter(!is.na(Family)) |> 
+  complete(Reef_1, Depth, Family) %>% 
+  mutate(No_Preds = replace_na(No_Preds, 0)) |> 
+  group_by(Depth, Family) %>%
+  summarise(mean = mean(No_Preds, na.rm = TRUE),
+            sd = sd(No_Preds, na.rm = TRUE),
+            SE = std.error(No_Preds, na.rm = TRUE))  |> 
+  mutate(Family = fct_reorder(Family, -mean)) |> 
+  arrange(Family) %>% 
+  slice_tail(n = 8)
+```
+
+
+```{r fig.width=160/25.4, fig.height=60/25.4}
+top_predfams_plot <- 
+  top_predfams %>% 
+  ggplot(aes(x = Family, y = mean)) +
+  geom_col(aes(fill = Depth, group = Depth), colour = "black", width = 0.7, position = position_dodge(width = 0.8)) +
+  geom_linerange(aes(ymin = mean - SE, ymax = mean + SE, group = Depth), size = 0.4, colour = "black", position = position_dodge(width = 0.8)) +
+#  scale_y_continuous(name = expression("Abundance (n.150m"^{2}~" ± SE)"), expand = c(0.1, 0.1)) +
+  scale_y_continuous(name = "\n", expand = c(0.1, 0.1)) +
+  scale_fill_manual(values = c("lightskyblue", "dodgerblue3", "darkblue")) +
+  scale_x_discrete(name = "Family") +
+  theme_bjc() + 
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        #plot.background = element_rect(fill = "transparent", colour = "black"),
+        #strip.text = element_text(size = 10, face = "italic"),
+        axis.text.x = element_text(size = 10, face = "plain", angle = 45, vjust = 0.75))
+top_predfams_plot
+```
+
+
+```{r fig.width=160/25.4, fig.height=50/25.4}
+bottom_predfams_plot <- 
+  bottom_predfams  |> 
+  ggplot(aes(x = Family, y = mean)) +
+  geom_col(aes(fill = Depth, group = Depth), colour = "black", width = 0.7, position = position_dodge(width = 0.8)) +
+  geom_linerange(aes(ymin = mean - SE, ymax = mean + SE, group = Depth), size = 0.4, colour = "black", position = position_dodge(width = 0.8)) +
+#  scale_y_continuous(name = expression("Abundance (n.150m"^{2}~" ± SE)"), expand = c(0.1, 0.1)) +
+  scale_y_continuous(name = "\n", expand = c(0.1, 0.1)) +
+  scale_fill_manual(values = c("lightskyblue", "dodgerblue3", "darkblue")) +
+  scale_x_discrete(name = "Family") +
+  theme_bjc() + 
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        #plot.background = element_rect(fill = "transparent", colour = "black"),
+        axis.text.x = element_text(size = 10, face = "plain", angle = 45, vjust = 0.75))
+bottom_predfams_plot
+```
+
+
+
+```{r fig.width=160/25.4, fig.height=100/25.4}
+cowplot::plot_grid(top_predfams_plot, bottom_predfams_plot, nrow = 2) +
+  annotate("text", x = 0.02, y = 0.5, label = expression("Abundance (n.150m"^{2}~" ± SE)"), angle = 90) +
+  theme(plot.background = element_rect(fill = "transparent", colour = "black"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# JUNK #
+
+
+# All families - 10m depth bin
+```{r fig.width=160/25.4, fig.height=180/25.4}
+lob_preds  |>  
+  group_by(Reef_1, Depth_bin, Family) |> 
+  summarise(No_Preds =sum(Number), na.rm = TRUE) |>  # All good - 514
+  ungroup()  |> 
+  complete(Reef_1, Depth_bin, Family) %>% 
+  mutate(No_Preds = replace_na(No_Preds, 0)) |> 
+  group_by(Depth_bin, Family) %>%
+  summarise(mean = mean(No_Preds),
+            sd = sd(No_Preds, na.rm = TRUE),
+            SE = std.error(No_Preds, na.rm = TRUE)) %>% 
+  ggplot(aes(x = Depth_bin, y = mean, fill = Depth_bin)) +
+  geom_line(aes(group = 1)) +
+  geom_linerange(aes(ymin = mean - SE, ymax = mean + SE)) +
+  geom_point(size = 1) +
+  scale_y_continuous(name = expression("Mean abundance (.150m"^{2}~" ± SE)"), expand = c(0.1, 0.1)) +
+  scale_x_discrete(name = "Depth bin (m)") +
+  theme_bjc() + 
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        strip.text = element_text(size = 10, face = "italic"),
+        axis.text.x = element_blank(),
+        plot.background = element_rect(fill = "transparent", colour = "black")) +
+  facet_wrap(~ Family, nrow = 6, scales = "free_y")
+
+  
+```
+
+
