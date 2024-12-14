@@ -1,0 +1,10 @@
+---
+title: "source extras"
+output: html_notebook
+---
+```{r}
+# Load packages, extras and helper functions
+list.files("code/0_extras", pattern="*.R$", full.names=TRUE, ignore.case=TRUE) |> 
+  sapply(source)
+```
+
