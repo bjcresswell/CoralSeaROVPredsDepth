@@ -1,0 +1,242 @@
+---
+title: "Abundance wrangling"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+
+# Load predator data, packages
+```{r message=FALSE, warning=FALSE, include=FALSE, fig.width = 150/25.4, fig.height = 90/25.4}
+# Clear out 
+rm(list=ls()) 
+
+# Load packages, extras and helper functions
+sourceRmd::sourceRmd("code/0_extras/source_extras.Rmd")
+
+# Load data
+# Either
+#source("code/wrangling/diw_rawdata.R")
+# Or
+load('data/2_Rdata/lob_preds.Rdata')
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, fig.width = 150/25.4, fig.height = 90/25.4}
+# Check data
+lob_preds
+
+# Distribution of response variable - per transect
+lob_preds |> group_by(T_ID) |> 
+  summarise(Transect_Abun = sum(Number)) |> 
+  ggplot() +  
+  geom_histogram(aes(x=Transect_Abun), binwidth = 1, color="black", fill="grey") 
+  scale_x_continuous("No. of predators")
+
+# Per observation
+lob_preds  |>  ggplot() +  
+  geom_histogram(aes(x=Number), binwidth = 1, color="black", fill="grey") +
+  scale_x_continuous("No. of predators")
+```
+
+
+```{r}
+lob_preds |> group_by(T_ID) |> 
+  summarise(Transect_Abun = sum(Number)) |> 
+  filter(Transect_Abun == 0) |> 
+  tally()
+```
+
+
+Quite a few zeros (98 = almost 1/3 of transects) and definitely right skewed. Indicating hurdle or ZI model
+
+## Let's check what our ranges are
+```{r}
+lob_preds  |> 
+  summarise_at(vars(Number), list(median = median, mean = mean, SD = sd, SE = std.error,
+                                  CI5 = ~quantile(., probs = 0.05), CI95 = ~quantile(., probs = 0.95), 
+                                  CI1 = ~quantile(., probs = 0.01), CI99 = ~quantile(., probs = 0.99), 
+                                  Q1 = ~quantile(., probs = 0.25), Q3=~quantile(., probs = 0.75)))
+```
+
+# In summary:
+
+The average number of preds observed per transect is around 1 (median and mean) 
+95% of observations are 3 or less and a lot of zeros
+Fair bit of variability (SD is nearly double the mean)
+1% of observations are 12 or more. We could round down these outliers to minimise their effect, however these are likely schooling species, so probably worth keeping in.
+
+## See how many observations removing outliers would affect:
+```{r}
+lob_preds |>  filter(Number >12)
+```
+  
+This is basically 8 schools of fishes observed over the study. Species look appropriate - we will leave these alone for modelling
+
+# Next we need a tbl that presents counts of predators per transect:
+```{r}
+lob_predsum <- 
+   lob_preds |> 
+   group_by(Reef_1, Reef_2, Site,                         # Grouping variables of reef and site - only going to need Reef_1
+            Depth, Depth_m, Depth_bin, Depth_bin_meso,    # Can model depth as continuous or as a binned variable  
+            #Site_lat, Site_long,                         # Don't need these vars for this analysis (see BioGeo repo for more info)
+            #dCT, dGBR, Region,                           # "
+            #Reef_1_Area, Reef_size,                      # "
+            #Isol, IsolRank, Reef_100,                    # " 
+            #Aspect_descriptive, Aspect_scale,            # "
+            #Temperature, Benthic_Complexity,             # "
+            #Situation, Habitat, Zone,
+            T_ID) |>
+   summarise(No_Preds = sum(Number)) |>  #
+   ungroup()
+```
+
+# Now have a tbl - 346 obs/T_ID:
+```{r}
+lob_predsum
+```
+
+# Check that agrees with what we calculated from the main tbl:
+```{r}
+lob_preds |>  select(T_ID) |> distinct()
+```
+
+Yep
+
+# Save if required
+```{r}
+save(lob_predsum, file = 'data/2_Rdata/lob_predsum.Rdata')
+```
+
+
+# Checks
+
+# Total # of predators observed (again, use both tbls to check)
+```{r}
+lob_predsum  |> summarise(Total_preds = sum(No_Preds))
+lob_preds |> summarise(No_Preds = sum(Number)) 
+```
+
+
+## Transects per reef
+```{r}
+lob_predsum  |> 
+  group_by(Reef_1) |> 
+  summarise(Transect_number = n())
+```
+Slightly unbalanced between reefs, but at least in the right order - the largest has the most transects and vice versa
+
+## How many sites?
+```{r}
+lob_predsum  |> 
+  select(Reef_1, Site) |> 
+  distinct() |> 
+  group_by(Reef_1) |> 
+  summarise(No_sites = n())
+```
+Lihou has many more sites due to how spread out it is
+
+
+## Sample size - by 10m depth bin
+```{r}
+lob_predsum |> 
+  group_by(Depth_bin) |> 
+  summarise(Transect_number = n())
+```
+Reasonably balanced
+
+## Sample size - by depth zone
+```{r}
+lob_predsum |> 
+  group_by(Depth_bin_meso) |> 
+  summarise(Transect_number = n())
+```
+Reasonably balanced
+
+
+
+## Predator abundance by reef
+
+### We know from the parallel analysis on reef isolation/biogeography that smaller reefs have more predators so this isn't that surprising:
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum  |> 
+  group_by(Reef_1) |> 
+  summarise_at(vars(No_Preds), list(median = median, mean = mean, SD = sd, SE = std.error)) |> 
+  ggplot() +
+  geom_pointrange(aes(x = Reef_1, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+# Data exploration
+
+## Overview of depth effect?
+
+### As continuous
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum |> 
+  ggplot() + 
+  geom_point(aes(x = Depth_m, y = No_Preds)) +
+  geom_smooth(aes(x = Depth_m, y = No_Preds), method = "glm") +
+  theme_minimal() +
+  ylab("No of predators per transect") +
+  xlab("Depth (m)")
+```
+
+
+A lot of noise but looks like decreasing abundance with increasing depth
+
+
+### 10m depth bins
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum  |> 
+  group_by(Depth_bin) |> 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) |> 
+  ggplot() + 
+  geom_pointrange(aes(x = Depth_bin, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Depth_bin, y = mean)) +
+  geom_line(aes(x = Depth_bin, y = mean, group = 1)) +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Depth (10m bins)")
+```
+
+
+### Photic zone bins
+```{r fig.width = 150/25.4, fig.height = 90/25.4}
+lob_predsum |> 
+  group_by(Depth) |> 
+  summarise_at(vars(No_Preds), list(mean = mean, SD = sd, SE = std.error)) |> 
+  ggplot() + 
+  geom_pointrange(aes(x = Depth, y = mean, ymin = mean-SE, ymax = mean+SE)) +
+  geom_point(aes(x = Depth, y = mean)) +
+  geom_line(aes(x = Depth, y = mean, group = 1)) +
+  theme_minimal() +
+  ylab("Abundance (no of predators ± SE)") +
+  xlab("Depth zone")
+```
+
+
