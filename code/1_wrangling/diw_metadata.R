@@ -1,23 +1,21 @@
 # Metadata wrangling
 
-source('code/packages.R')
+source('code/0_extras/packages.R')
 
 # Biogeographic parameters - these have already been determined
-reef_biogeo <- read_excel("data/reef_biogeo.xlsx", 2) %>% 
+reef_biogeo <- read_excel("data/1_mappingdata/reef_biogeo.xlsx", 2) |> 
   mutate_if(is.character, as.factor)          # Fix ch vars
 
 
 # Main metadata file (want a copy of the full metadata so will import that first)
-rmetadata_raw <- data.io::read$csv("https://figshare.com/ndownloader/files/42424437?private_link=0a7edbfa91467638b998") 
-#save(rmetadata_raw, file = "data/Rdata/rmetadata_raw.Rdata")    
-#load("data/Rdata/rmetadata_raw.Rdata")    
+#rmetadata_raw <- data.io::read$csv("https://figshare.com/ndownloader/files/42424437?private_link=0a7edbfa91467638b998") 
+#save(rmetadata_raw, file = "data/2_Rdata/rmetadata_raw.Rdata")    
+load("data/2_Rdata/rmetadata_raw.Rdata")    
 
 # Trim down to only transects on the outside of reefs and add other variables as required - leaves us with 496 transects
-rmetadata <- rmetadata_raw %>% 
-  #filter(Habitat != "lagoon") %>%  # Get rid of lagoon transects early
-  filter(Situation != "inner") %>%  # Get rid of any transect not on an outside reef
-  droplevels() %>% 
-  mutate(Aspect_descriptive = replace(Aspect_descriptive, Aspect_descriptive == "modertae_slope", "moderate_slope")) %>%  # Fix variable spelling
+rmetadata <- rmetadata_raw |> 
+  filter(Situation != "inner")  |>  # Get rid of any transect not on an outside reef
+  droplevels() |> 
   mutate(T_ID = paste(Survey, Site, Survey_Day, Dive_No, Transect, sep = "-"),  # T_ID variable for wrangling
          Depth_bin = factor(case_when(Depth_m < 11 ~ '0-10',
                                       Depth_m >= 11  & Depth_m < 21 ~ '11-20', 
@@ -31,22 +29,14 @@ rmetadata <- rmetadata_raw %>%
                                       Depth_m >= 91  ~ '91-100'), ordered = TRUE),
          Depth_bin_meso = fct_relevel(factor(case_when(Depth_m < 31 ~ 'Altiphotic',
                                               Depth_m >= 31  & Depth_m < 61 ~ 'Upper_mesophotic', 
-                                              Depth_m >= 61   ~ 'Lower_mesophotic')), "Altiphotic", "Upper_mesophotic")) %>% 
+                                              Depth_m >= 61   ~ 'Lower_mesophotic')), "Altiphotic", "Upper_mesophotic"))  |> 
   mutate(Depth = factor(case_when(grepl("Altiphotic", Depth_bin_meso) ~ "Shallow",
                                   grepl("Upper_mesophotic", Depth_bin_meso) ~ "Upper",
-                                  grepl("Lower_mesophotic", Depth_bin_meso) ~ "Lower"))) %>% 
+                                  grepl("Lower_mesophotic", Depth_bin_meso) ~ "Lower"))) |> 
   mutate(Depth = fct_relevel(Depth, c("Shallow", "Upper")))  |>
   mutate(Site_Depth = factor(paste(Site, Depth, sep = "_")))  |>  
   left_join(reef_biogeo) %>%  # Combine with biogeographic metadata
   mutate_if(is.character, as.factor) %>%             # Fix ch vars
-  mutate(Region = fct_relevel(Region, "Far_North", "North")) %>% 
-  mutate(Reef_size = factor(case_when(Reef_1_Area < 181 ~ 'Small',
-                                      Reef_1_Area >= 181 & Reef_1_Area < 919 ~ 'Medium',
-                                      Reef_1_Area > 919 ~ 'Large'))) %>% 
-  mutate(#Isol = sqrt(dGBR) / sqrt(Reef_100),      
-         Isol = sqrt(dGBR+dNN) / sqrt(Reef_1_Area + Reef_100),
-         IsolRank = dense_rank(desc(Isol))) %>% 
-  mutate(Reef_1 = fct_reorder(Reef_1, desc(Isol))) %>% 
   mutate(Zone = factor(                # Ideally want to get this all into the metadata
     case_when(
       Reef_1 == "Bougainville" & Site_long < 147.108883 & Site_lat > -15.495 | 
@@ -62,15 +52,17 @@ rmetadata <- rmetadata_raw %>%
         Reef_1 == "Saumarez" |
         Reef_1 == "Willis" |
         Reef_1 == "Wreck" 
-      ~ "HPZ", .default = "NTMR"))) %>% 
+      ~ "HPZ", .default = "NTMR"))) |> 
     tibble()
 
 
-lob_metadata <- rmetadata %>%  filter(Reef_1 == "Osprey" | Reef_1 == "Bougainville" | Reef_1 == "Lihou") |>  # Need this for a full jo
+# We only need Lihou, Osprey and Bougainville for this analysis
+lob_metadata <- rmetadata  |> 
+  filter(Reef_1 == "Osprey" | Reef_1 == "Bougainville" | Reef_1 == "Lihou") |>  
   droplevels()
 
 
-#save(lob_metadata, file = "data/Rdata/lob_metadata.Rdata")    
-#load("data/Rdata/lob_metadata.Rdata")    
+#save(lob_metadata, file = "data/2_Rdata/lob_metadata.Rdata")    
+#load("data/2_Rdata/lob_metadata.Rdata")    
 
 
