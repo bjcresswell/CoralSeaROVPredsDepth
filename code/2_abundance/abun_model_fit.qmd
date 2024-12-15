@@ -1,0 +1,273 @@
+---
+title: "Effect of depth on predator abundance: model fitting"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+
+# Load data and other preliminaries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Clear out 
+rm(list=ls()) 
+
+# Load packages, extras and helper functions
+sourceRmd::sourceRmd("code/0_extras/source_extras.Rmd")
+
+# Load data
+#sourceRmd("code/abundance/diw_abund.Rmd")
+load("data/2_Rdata/lob_predsum.Rdata")
+
+# Set global STAN options
+options(#mc.cores = 3,
+        mc.cores = parallel::detectCores(),
+        brms.backend = "cmdstanr")
+rstan_options(auto_write = TRUE)
+
+# Set chain properties
+CHAINS <- 3
+CORES <- parallel::detectCores()
+ITER <- 5000
+WARMUP <- 1000
+BAYES_SEED <- 123
+THIN <- 4
+```
+
+
+# Zero inflation
+
+We know from modelling the wider dataset that we probably will need a ZI negbinomial model. Here we are just interested in depth differences for these three reefs
+
+## Set model formula - reef as R.E.
+```{r}
+abun_form <- bf(No_Preds ~ scale(Depth_m) + (1|Reef_1), zi ~ 1, family = zero_inflated_negbinomial(link = "log"))
+```
+
+## Check what priors we need to estimate
+```{r}
+get_prior(abun_form, data = lob_predsum)
+```
+
+# Look at range of data
+```{r}
+lob_predsum |> 
+  group_by(Depth) |> 
+  summarise(logmedian = log(median(No_Preds)), logMAD = log(mad(No_Preds)), logmean = log(mean(No_Preds)), logsd = log(sd(No_Preds)))
+```
+
+
+## Weakly informative priors
+```{r}
+abun_priors <-  
+  prior(normal(1, 2), class = 'Intercept') +
+  prior(normal(0, 0.5), class = 'b') +
+  prior(gamma(2, 2), class = 'shape') +
+  prior(logistic(0, 1), class = 'Intercept', dpar = "zi")
+```
+
+
+## Fit model:
+```{r}
+abunmod_priorsonly <- brm(abun_form,
+  data = lob_predsum,
+  prior = abun_priors,
+  sample_prior = 'only',            
+  chains = CHAINS, iter = ITER, warmup = WARMUP, seed = BAYES_SEED, thin = THIN,
+  silent = 0,
+  refresh = 0)
+```
+
+
+## Check how wide priors are
+```{r}
+abunmod_priorsonly |> conditional_effects() |> 
+   plot(points = TRUE, ask = FALSE, plot = TRUE) 
+```
+
+
+
+# Fit model with data
+```{r}
+abun_mod <- abunmod_priorsonly |> 
+  update(sample_prior = 'yes', control = list(adapt_delta = 0.99, max_treedepth = 20), 
+         silent = 2,
+         refresh = 0)
+```
+
+
+# Check prior - posterior influence
+```{r}
+abun_mod |> SUYR_prior_and_posterior()
+```
+
+
+Looking fine
+
+
+# Chain diagnostics
+```{r chain-checks}
+# Trace plots
+abun_mod$fit |>  stan_trace()
+## Autocorrelation
+abun_mod$fit |> stan_ac() 
+## rhat
+abun_mod$fit |> stan_rhat() 
+## ESS
+abun_mod$fit |> stan_ess()
+```
+
+
+# Residuals
+```{r}
+resids <- make_brms_dharma_res(abun_mod, integerResponse = FALSE)
+testUniformity(resids)
+plotResiduals(resids, form = factor(rep(1, nrow(lob_predsum))))
+plotResiduals(resids, quantreg = FALSE)
+testDispersion(resids) # Dispersion plot (dispersion = variance/mean) - we assume mean and variance are the same, so we need to check
+```
+Residuals don't look good
+
+## PP checks
+```{r}
+# Exp
+pp_check(abun_mod, ndraws = 250)
+# Logged
+predicted <- posterior_predict(abun_mod)
+bayesplot::ppc_dens_overlay(y = log1p(lob_predsum$No_Preds), 
+                            yrep = log1p(predicted[1:100,]))
+```
+
+A few issues with this model
+Trying model with site as random effect.
+
+## Set model formula - site as re
+```{r}
+abun_form2 <- bf(No_Preds ~ scale(Depth_m) + (1|Site), zi ~ 1, family = zero_inflated_negbinomial(link = "log"))
+```
+
+
+# Fit model with data
+```{r}
+abun_mod2 <- 
+  brm(abun_form2,
+  data = lob_predsum,
+  prior = abun_priors,
+  sample_prior = 'yes',  
+  control = list(adapt_delta = 0.99, max_treedepth = 20), 
+  chains = CHAINS, iter = ITER, warmup = WARMUP, seed = BAYES_SEED, thin = THIN,
+  silent = 0,
+  refresh = 0)
+```
+
+
+## Model diagnostics/validation
+
+
+# Check prior - posterior influence
+```{r}
+abun_mod2 |> SUYR_prior_and_posterior()
+```
+
+
+Looking fine
+
+
+# Chain diagnostics
+
+## Trace plots
+```{r traceplot}
+abun_mod2$fit |>  stan_trace()
+## Autocorrelation
+abun_mod2$fit |> stan_ac() 
+## rhat
+abun_mod2$fit |> stan_rhat() 
+## ESS
+abun_mod2$fit |> stan_ess()
+```
+
+
+# Residuals
+```{r}
+resids <- make_brms_dharma_res(abun_mod2, integerResponse = FALSE)
+testUniformity(resids)
+plotResiduals(resids, form = factor(rep(1, nrow(lob_predsum))))
+plotResiduals(resids, quantreg = FALSE)
+testDispersion(resids) # Dispersion plot (dispersion = variance/mean) - we assume mean and variance are the same, so we need to check
+```
+
+
+# Residuals look ok
+
+## PP checks
+```{r}
+# Exp
+pp_check(abun_mod2, ndraws = 250)
+# Logged
+predicted <- posterior_predict(abun_mod2)
+bayesplot::ppc_dens_overlay(y = log1p(lob_predsum$No_Preds), 
+                            yrep = log1p(predicted[1:100,]))
+```
+
+
+## Compare models 
+The chain and model diagnostics indicate model 2 but will do loo check also
+```{r}
+loo_compare(brms::loo(abun_mod), # Reef as R.E.
+            brms::loo(abun_mod2)) # Site as R.E.
+
+```
+Model with site and depth zone as R.E. has best looic, however the S.E. in elpd diff is greater than the elpd diff itself so will use model 2 going forward
+
+
+# Conditional effects plot
+```{r}
+abun_mod |> conditional_effects() |> plot(points = FALSE, ask = FALSE) # Reef as R.E.
+abun_mod2 |> conditional_effects() |> plot(points = FALSE, ask = FALSE) # Site as R.E.
+```
+
+
+# Check R2
+If interested - from AIC and conditional effects plots, can predict how this is going to be:
+```{r}
+#bayes_R2(abun_mod)
+bayes_R2(abun_mod2)
+```
+
+
+
+```{r}
+abun_mod_final <- abun_mod2
+```
+
+```{r}
+save(abun_mod_final, file = "data/2_Rdata/mod_data/abun_mod_final.Rdata")
+```
+
+
+```{r}
+# END #
+```
+
