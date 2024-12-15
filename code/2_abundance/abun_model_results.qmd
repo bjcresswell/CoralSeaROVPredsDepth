@@ -1,0 +1,339 @@
+---
+title: "Effect of depth on predator abundance: results"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+
+
+# Load data and other preliminaries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Clear out 
+rm(list=ls()) 
+
+# Load packages, extras and helper functions
+sourceRmd::sourceRmd("code/0_extras/source_extras.Rmd")
+
+# Load data
+#sourceRmd("code/abundance/diw_abund.qmd")
+load("data/2_Rdata/lob_predsum.Rdata")
+
+# Load model
+#sourceRmd("code/abundance/abun_model_fit.qmd")
+load("data/2_Rdata/mod_data/abun_mod_final.Rdata")
+```
+
+
+
+# Model summary
+
+## Table
+```{r}
+abun_mod_final
+```
+Summary table difficult to interpret as on link scale
+
+
+## Can plot to aid interpretation
+```{r}
+abun_mod_final |> conditional_effects() |> plot(ask = FALSE, points = FALSE) # Without raw data
+```
+
+## Can also do via emmeans
+```{r}
+abun_mod_final |> 
+  emmeans(~ Depth_m,
+           #regrid = "response",
+           at = list(Depth_m = seq(4, 99, 1))) |> 
+  update(tran = "log") |> 
+  regrid(transform = "response") |> 
+  as_tibble() |> 
+  ggplot(aes(x = Depth_m, y = prob)) +
+  geom_ribbon(aes(ymax = upper.HPD, ymin = lower.HPD)) +
+  geom_line()
+```
+
+## Summary table
+```{r}
+abun_mod_final |> 
+  gather_draws(`^b_.*`, regex=TRUE) |> 
+  #filter(.variable != 'b_Intercept') |> 
+  mutate(Value = exp(.value), .keep = "unused")  |> 
+  group_by(.variable) |> 
+  summarise(median_hdci(Value),
+            Pl = mean(Value < 1),
+            Pg = mean(Value > 1))
+```
+
+```{r}
+abun_mod_final |> 
+  as_draws_df() |>    # Extract draws
+  exp() |>            # Back transform
+  summarise_draws(median,
+                  HDInterval::hdi,
+                  rhat, ess_bulk, ess_tail,
+                  Pl = ~mean(.x <1),                       # Exceedence prob - on exp scale it's sig if doesn't cross 1
+                  Pg = ~mean(.x >1))|> 
+  as_tibble() |> 
+  mutate(across(where(is.numeric), round, 2))
+```
+
+
+### Interpretation:
+
+- Strong evidence for a negative effect of depth:
+0.66 * as many predators per 1SD increase in depth (not in actual meters units) 
+-> Median = 1-0.66 equivalent to a 34% decline per 1SD
+-> Max = 1-0.58 = 42%
+-> Min = 1-0.75 = 25%
+
+Probability of decline in abundance P = 1
+
+## Need to convert this from SD depth into actual meters:
+
+Could just derive these values from the data:
+```{r}
+lob_predsum |> 
+  summarise(sd_Depth = sd(Depth_m))
+```
+34% decline in predator numbers for every 26m depth
+34/2.6 = 13
+13% decline for every ~10m depth increase
+
+
+
+## Better to use emmeans/emtrends
+Need new data at min and max depth and also the whole depth range
+```{r}
+# New data for plotting contrasts between min and max depths
+maxmin_depth <- 
+lob_predsum|> 
+  summarise(min_Depth = min(Depth_m),
+            max_Depth = max(Depth_m)) |> 
+  unlist(use.names=FALSE) |> 
+  as_tibble() |> 
+  rename(Depth_m = value)
+
+# New data for plotting trend
+#depth_grid <- with(lob_species_rich_asymp, list(Depth_m = seq(from = min(Depth_m), to = max(Depth_m), len = 100)))
+depth_grid <- seq_range(lob_predsum$Depth_m, n = 100) |>  as_tibble() |> 
+  rename(Depth_m = value)
+```
+
+
+## emmeans for each max and min depth
+```{r}
+abun_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, 
+          type = "response", epred = TRUE) |> 
+  as_tibble()
+```
+## So on average we have about 4 predators per transect in the shallows and 1 per transect at depth. 4:1 ratio
+
+# Get contrast ratio ±HDI
+```{r}
+# With the extra log transformation
+abun_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE) |> 
+  regrid(transform = "log")  |> 
+  pairs(type = "response")
+```
+
+# On response scale
+```{r}
+abun_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE) |> 
+  #regrid()  |> 
+  pairs(type = "response")
+```
+
+
+```{r}
+abun_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE) |> 
+  regrid()  |> 
+  pairs(reverse = FALSE) |> 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(.value, .width = c(0.8, 0.95)), 
+            Pl = mean(.value < 0),
+            Pg = mean(.value > 0))
+
+  
+  
+  
+  
+  
+```
+So over 4x as many predators in the shallows compared to the deepest depths surveyed.
+
+
+## Figures
+
+## Effect of depth
+Extract posterior draws to reconstruct trend
+```{r fig.height=70/26.5, fig.width=100/25.4}
+depth_abun_trend <- 
+abun_mod_final |> 
+  emmeans(~ Depth_m, epred = TRUE,
+           at = depth_grid) |> 
+  gather_emmeans_draws() |> 
+  ggplot(aes(x = Depth_m, y = .value)) +
+  #geom_point(data = lob_predsum %>% filter(No_Preds <12), aes(x = Depth_m, y = No_Preds), fill = "#0066cc", colour = "midnightblue", pch = 21, alpha = 0.3, position = position_jitter())+
+  geom_line(aes(group = .draw), colour = "#0066cc", alpha = 0.05) +
+  stat_lineribbon(colour = "midnightblue", size = 0.5, point_interval = "median_hdci", fill = "#0066cc", .width = 0.001, alpha = 1) +
+  scale_y_continuous(name = expression("No. preds (.150m"^{2}~")"), limits = c(0,10), expand = c(0.05,0), breaks = c(0,2,4,6,8,10)) +
+  scale_x_continuous("Depth (m below sea surf.)") + 
+  theme_bjc() +
+  theme(axis.title.x = element_text(colour = "black", size = 10),
+        axis.title.y = element_text(colour = "black", size = 10),
+        axis.text = element_text(colour = "black", size = 9),
+        legend.position = "none")
+
+depth_abun_trend
+```
+
+
+
+
+
+# Probability distribution of effect size
+```{r fig.width = 70/25.4, fig.height=50/25.4}
+depth_abun_effect <- 
+abun_mod_final |> 
+  gather_draws(`^b_.*`, regex=TRUE)  |>    # Need to use gather_draws here if you want to use the regex
+  filter(.variable == 'b_scaleDepth_m') |>
+  ungroup() |> 
+  ggplot(aes(x = 1-exp(.value))) + 
+  stat_halfeye(fill = "#0066cc", .width = c(0.8, 0.95), point_interval = "median_hdi") +
+  geom_vline(xintercept = 0, lty = 11) +
+  #geom_vline(xintercept = 0.342, colour = "white") + # 0.342 = median decline (%) per 1 SD depth (see summary table)
+  #annotate(geom = "text", label = "P=1", x = -0.6, y = 0.8, colour = "black", size = 3.5, family = "Arial", hjust = 0) +
+  scale_y_discrete(expand = c(0.08,0)) +
+  scale_x_continuous("Scaled effect distribution") +
+  theme_bjc() +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(colour = "black", size = 10),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(colour = "black", size = 9),
+        legend.position = "none")
+
+depth_abun_effect
+```
+
+Median effect size is 34.1% per 1SD increase in depth 
+95% CI 25 - 42
+
+
+# Combine
+```{r fig.width = 152/25.4, fig.height=60/25.4}
+depth_abun_fig <- 
+  cowplot::plot_grid(depth_abun_trend, depth_abun_effect, 
+                     nrow = 1, labels = c("a", "b"), rel_widths = c(1.2, 0.6), label_size = 10, align = "h") +
+  theme(plot.background = element_rect(color = "black"))
+depth_abun_fig
+```
+
+
+# Save
+```{r}
+ggsave(filename = "output/depth_abun_fig.pdf", plot = depth_abun_fig, width = 152, height = 60, device = cairo_pdf, units = "mm", dpi = 300)
+ggsave(filename = "output/depth_abun_fig.jpg", plot = depth_abun_fig, width = 152, height = 60, device = "jpeg", units = "mm", dpi = 300)
+```
+
+
+
+
+# Contrast figure: shallow to deep
+
+# Calculate contrast
+```{r fig.width = 40/25.4, fig.height=50/25.4}
+abun_depth_contrast <- abun_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, type = "link") |> 
+  pairs(reverse = FALSE) |> 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(exp(.value), .width = c(0.8, 0.95))) |> 
+  mutate(Contrast = "Abundance")
+
+abun_depth_contrast
+```
+
+# Plot
+```{r fig.width = 60/25.4, fig.height=35/25.4}
+depth_abun_contrast_fig <- 
+ggplot() +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax, x = contrast), data = abun_depth_contrast |> filter(.width == 0.8), linewidth = 1.7) +
+  geom_pointrange(aes(y = y, ymin = ymin, ymax = ymax, x = contrast), data = abun_depth_contrast |> filter(.width == 0.95), pch = 21, size = 1.2, fill = "#0066cc", linewidth = 0.7) +
+  geom_hline(yintercept = 1, lty = 11) +
+  theme_bjc() +
+  scale_y_continuous("Ratio (X:1)", position = "right") +
+  scale_x_discrete("Depth contrast 4-99m") +
+   theme(axis.title = element_text(colour = "black", size = 10),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(colour = "black", size = 9),
+        legend.position = "none") +
+    theme(plot.background = element_rect(color = "black", fill = NA, linewidth = 0.3))
+
+
+depth_abun_contrast_fig
+```
+
+# Save
+```{r}
+ggsave(filename = "output/depth_abun_full_contrast.pdf", plot = depth_abun_contrast_fig, width = 50, height = 55, device = cairo_pdf, units = "mm", dpi = 300)
+```
+
+
+# Make RHS of plot
+```{r fig.width = 60/25.4, fig.height=70/25.4}
+depth_abun_fig_rhs <- 
+  cowplot::plot_grid(depth_abun_effect, depth_abun_contrast_fig, 
+                     nrow = 2, labels = c("b", "c"), rel_heights = c(1, 1), label_size = 10) +
+  theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 0.3))
+depth_abun_fig_rhs
+```
+
+# Make full figure
+
+```{r fig.width = 160/25.4, fig.height=80/25.4}
+depth_abun_fig_full <- 
+  cowplot::plot_grid(depth_abun_trend, depth_abun_fig_rhs, 
+                     nrow = 1, labels = c("a"), rel_widths = c(1, 0.6), label_size = 10) +
+  theme(panel.border = element_rect(color = "black", fill = "transparent", linewidth = 0.7))
+   # plot.background = element_rect(color = "black"))
+depth_abun_fig_full
+```
+
+# Save
+```{r}
+ggsave(filename = "output/depth_abun_fig_full.pdf", plot = depth_abun_fig_full, width = 160, height = 80, device = cairo_pdf, units = "mm", dpi = 300)
+ggsave(filename = "output/depth_abun_fig_full.jpg", plot = depth_abun_fig_full, width = 160, height = 80, device = "jpeg", units = "mm", dpi = 300)
+```
+
+
+
+
+
