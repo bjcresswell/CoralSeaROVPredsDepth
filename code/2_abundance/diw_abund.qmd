@@ -100,7 +100,7 @@ This is basically 8 schools of fishes observed over the study. Species look appr
 ```{r}
 lob_predsum <- 
    lob_preds |> 
-   group_by(Reef_1, Reef_2, Site,                         # Grouping variables of reef and site - only going to need Reef_1
+   group_by(Reef_1, Reef_2, Site, Site_Depth,             # Grouping variables of reef and site - only going to need Reef_1
             Depth, Depth_m, Depth_bin, Depth_bin_meso,    # Can model depth as continuous or as a binned variable  
             #Site_lat, Site_long,                         # Don't need these vars for this analysis (see BioGeo repo for more info)
             #dCT, dGBR, Region,                           # "
