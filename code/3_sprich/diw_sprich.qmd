@@ -119,5 +119,5 @@ species_rich_asymp <-
 
 # And save file for modelling
 ```{r}
-save(species_rich_asymp, file = "data/Rdata/lob_species_rich_asymp.Rdata")
+save(species_rich_asymp, file = "data/2_Rdata/species_rich_asymp.Rdata")
 ```
