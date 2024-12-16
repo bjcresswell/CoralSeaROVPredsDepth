@@ -1,0 +1,123 @@
+---
+title: "Asymtotic species richness wrangling"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+
+# Load predator data, packages
+```{r message=FALSE, warning=FALSE, include=FALSE, fig.width = 150/25.4, fig.height = 90/25.4}
+# Clear out 
+rm(list=ls()) 
+
+# Load packages, extras and helper functions
+sourceRmd::sourceRmd("code/0_extras/source_extras.Rmd")
+
+# Load data
+# Either
+#source("code/wrangling/diw_rawdata.R")
+# Or
+load('data/2_Rdata/lob_preds.Rdata')
+load("data/2_Rdata/lob_predsum.Rdata")
+load("data/2_Rdata/lob_metadata.Rdata")
+```
+
+
+# Introduction
+We have 346 transects over 17 sites, with pretty even depth coverage:
+```{r}
+lob_metadata |> select(T_ID) |> distinct()
+lob_metadata |> select(Site) |> distinct()
+lob_metadata |> select(Depth) |> summary()
+```
+
+However, there are quite a few transects with few or 0 observations
+```{r}
+nopreds <- lob_preds |> 
+  select(Reef_1, T_ID, Binomial) |> 
+  distinct()  |> 
+  filter(is.na(Binomial)) |> 
+  select(Reef_1, T_ID) |> 
+  mutate(n = 0)
+```
+98 with no predators
+
+We are going to rarefy these data to get asymptotic species richness estimates, but will have to manage these observations separately.
+
+# Run rarefaction script
+```{r}
+source('code/3_sprich/transect_rarefaction.R')
+```
+
+
+## The asymptotic species richness is in a sub-set of the iNEXT object
+```{r}
+transect_rarefied$AsyEst
+```
+
+This has each of the following per transect:
+- Species richness 
+- Shannon diversity
+- Simpson diversity 
+- plus SE and CI for each of the above
+
+# We can extract just species richness from this and combine with our predictor variables (env_vars)
+```{r}
+species_rich_asymp <- 
+  env_vars |> 
+  left_join(transect_rarefied$AsyEst |> 
+  rename(T_ID = Assemblage)) |>
+  mutate_if(is.character, as.factor) |> 
+  filter(Diversity == "Species richness") |> 
+  rename(SpecRich = Estimator)
+```
+
+
+## Check
+```{r}
+species_rich_asymp
+```
+Of course we only have 248 transects in here as there are 98 with no observations that were excluded from rarefaction
+
+## Add back in 0 obs transects by full_join with env_vars
+```{r}
+species_rich_asymp <- 
+  env_vars |> 
+  left_join(transect_rarefied$AsyEst |> 
+  rename(T_ID = Assemblage)) |>
+  mutate_if(is.character, as.factor) |> 
+  filter(Diversity == "Species richness") |> 
+  rename(SpecRich = Estimator)  |> 
+  full_join(env_vars) |> 
+  mutate(across(where(is.double), ~replace_na(., 0)))
+```
+
+
+# And save file for modelling
+```{r}
+save(species_rich_asymp, file = "data/Rdata/lob_species_rich_asymp.Rdata")
+```
