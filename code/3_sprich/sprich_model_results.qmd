@@ -1,0 +1,313 @@
+---
+title: "Effect of depth on asymptotic predator species richness: results"
+author: "Ben Cresswell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 10
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+# Set options, housekeeping
+knitr::opts_chunk$set(
+	echo = FALSE,
+	include = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+
+
+# Load data and other preliminaries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Clear out 
+rm(list=ls()) 
+
+# Load packages, extras and helper functions
+sourceRmd::sourceRmd("code/0_extras/source_extras.Rmd")
+
+# Load data
+#sourceRmd("code/abundance/diw_abund.qmd")
+load("data/2_Rdata/lob_predsum.Rdata")
+
+# Load model
+#sourceRmd("code/abundance/abun_model_fit.qmd")
+load("data/2_Rdata/mod_data/abun_mod_final.Rdata")
+```
+
+
+# Model summary
+
+## Table
+```{r}
+sr_mod_final
+```
+
+
+## Can plot to aid interpretation
+```{r}
+sr_mod_final |> conditional_effects() |> plot(ask = FALSE, points = FALSE) # Without raw data
+```
+
+
+## Can also do via emmeans
+```{r}
+sr_mod_final |> 
+  emmeans(~ Depth_m,
+           #regrid = "response",
+           #epred = TRUE,
+           at = list(Depth_m = seq(4, 99, 1))) |> 
+  update(tran = "log") |> 
+  regrid(transform = "response") |> 
+  as_tibble() |> 
+  ggplot(aes(x = Depth_m, y = emmean)) +
+  geom_ribbon(aes(ymax = upper.HPD, ymin = lower.HPD)) +
+  geom_line()
+```
+
+## Summary table
+```{r}
+sr_mod_final |> 
+  gather_draws(`^b_.*`, regex=TRUE) |> 
+  filter(!grepl( "Intercept", .variable)) |> 
+  mutate(Value = exp(.value), .keep = "unused")  |> 
+  group_by(.variable) |> 
+  summarise(median_hdci(Value),
+            Pl = mean(Value < 1),
+            Pg = mean(Value > 1))
+```
+
+## Or
+```{r}
+sr_mod_final |> 
+  as_draws_df() |>    # Extract draws
+  exp() |>            # Back transform
+  summarise_draws(median,
+                  HDInterval::hdi,
+                  rhat, ess_bulk, ess_tail,
+                  Pl = ~mean(.x <1),                       # Exceedence prob - on exp scale it's sig if doesn't cross 1
+                  Pg = ~mean(.x >1))|> 
+  as_tibble() |> 
+  mutate(across(where(is.numeric), round, 2))
+```
+
+### Interpretation:
+- Strong evidence for a negative effect of depth:
+An 18% decline in asym sp richness per 1 unit SD increase in depth 95%CI [10 - 26%]
+
+
+## Can illustrate scaled effect size via density/half eye plot:
+```{r fig.width = 40/25.4, fig.height=30/25.4}
+sr_effect_fig <- 
+sr_mod_final |> 
+  gather_draws(`^b_.*`, regex=TRUE)  |>    # Need to use gather_draws here if you want to use the regex
+  filter(.variable == 'b_scaleDepth_m') |>
+  ungroup() |> 
+  ggplot(aes(x = 1-exp(.value))) + 
+  stat_halfeye(fill = "#0066cc", .width = c(0.8, 0.95), point_interval = "median_hdi") +
+  #t = -0.23, lty = 11) +
+  geom_vline(xintercept = 0, lty = 11) +
+  #annotate(geom = "text", label = "P=1", x = -0.4, y = 0.8, colour = "black", size = 3.5, family = "Arial", hjust = 0) +
+  scale_y_discrete(expand = c(0,0.08)) +
+  scale_x_continuous("Scaled effect distribution") +
+  theme_bjc() +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(colour = "black", size = 10),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(colour = "black", size = 9),
+        legend.position = "none")
+
+sr_effect_fig
+```
+
+
+## Can use emmeans to access pairwise contrasts between specific depths - e.g. max vs min depth
+Need new data at min and max depth and also the whole depth range
+
+### Make new dataframes for max vs min depth
+
+```{r}
+maxmin_depth <- 
+species_rich_asymp|> 
+  summarise(min_Depth = min(Depth_m),
+            max_Depth = max(Depth_m)) |> 
+  unlist(use.names=FALSE) |> 
+  as_tibble() |> 
+  rename(Depth_m = value)
+```
+
+
+
+## emmeans max and min depths
+
+### Basic way
+Need to have the tran = argument in the emmeans and the transform = inside the regrid
+```{r}
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")   |> 
+  regrid(transform = "response")
+```
+
+Or we can get at the posterior draws and exponentiate 
+```{r}
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth)  |> 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(exp(.value)))
+```
+
+# Or we can get the model's expected predictions
+Note that these are slightly different due to error from group level effects excluded from estimation
+```{r}
+# Again, can be the simple way
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE) 
+
+# Or via the draws:
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE) |> 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(.value))
+```
+
+# Draws summarised
+```{r}
+# Exponentiate after gathering draws
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth) %>% 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(exp(.value)))
+
+# Or
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "regrid")  |> 
+  gather_emmeans_draws() |> 
+  summarise(median_hdci(exp(.value)))
+```
+So 2.84 species per transect at shallowest depths (CI 2.2 - 3.5) compared to 1.4 at nearly 100m (CI 1.1 = 1.8)
+That's just over double. Check contrast ratio..
+
+
+# Get contrast ratio
+Simplest way is direct via emmeans:
+```{r}
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")  |> 
+  regrid(transform = "response") |> 
+  pairs()
+```
+However, this is giving you the expected-predicted contrast on the response scale (numbers of predatory species)
+
+You can "fake" the log transformation to get it as a ratio:
+```{r}
+# Can get on response scale using a double regrid
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")  |> 
+  regrid(transform = "response") |>  
+  regrid(transform = "log")  |> 
+  pairs(type = "response")
+
+# Or the epred = TRUE argument
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, epred = TRUE)  |> 
+  regrid(transform = "log")  |> 
+  pairs(type = "response")
+```
+So 2 x more predator species per transect 95%HPD[1.3 - 2.8]
+
+## What if we want 80% credible intervals
+Can't pipe the above to gather_emmeans_draws as it ignores the ratio generating step
+Need to specify this using the level = argument in pairs()
+```{r}
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")  |> 
+  regrid(transform = "response") |>  
+  regrid(transform = "log")  |> 
+  pairs(type = "response", level = 0.8) 
+```
+
+## Combine 95 and 80 HPD contrasts for plotting
+```{r}
+cr_95 <- 
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")  |> 
+  regrid(transform = "response") |>  
+  regrid(transform = "log")  |> 
+  pairs(type = "response", level = 0.95) |> 
+  as_tibble() |> 
+  mutate(cred_int = "CR_95")
+
+cr_80 <- 
+sr_mod_final |> 
+  emmeans(~ Depth_m, at = maxmin_depth, tran = "log")  |> 
+  regrid(transform = "response") |>  
+  regrid(transform = "log")  |> 
+  pairs(type = "response", level = 0.8) |> 
+  as_tibble() |> 
+  mutate(cred_int = "CR_80")
+
+sr_contrast <- 
+  bind_rows(cr_95, cr_80) |> 
+  group_by(contrast)
+```
+
+## Plot
+```{r fig.width = 60/25.4, fig.height=35/25.4}
+sr_contrast_fig <- 
+ggplot(mapping = aes(y = ratio, ymin = lower.HPD, ymax = upper.HPD)) +
+  geom_pointrange(mapping = aes(x = contrast), data = sr_contrast |> filter(cred_int == "CR_80"), linewidth = 1.7) +
+  geom_pointrange(mapping = aes(x = contrast), data = sr_contrast |> filter(cred_int == "CR_95"), linewidth = 0.7,
+                  pch = 21, size = 1.2, fill = "#0066cc") +
+  geom_hline(yintercept = 1, lty = 11) +
+  theme_bjc() +
+  scale_y_continuous("Ratio (X:1)", position = "right", breaks = c(1,2,3,4), limits = c(1, 3)) +
+  scale_x_discrete("Depth contrast 4-99m") +
+   theme(axis.title = element_text(colour = "black", size = 10),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(colour = "black", size = 9),
+        legend.position = "none") +
+    theme(plot.background = element_rect(color = "black", fill = NA, linewidth = 0.3))
+  
+  
+
+#sr_contrast_fig
+```
+
+
+For the trend
+```{r}
+#depth_grid <- with(species_rich_asymp, list(Depth_m = seq(from = min(Depth_m), to = max(Depth_m), len = 100)))
+depth_grid <- seq_range(species_rich_asymp$Depth_m, n = 100) |>  as_tibble() |> 
+  rename(Depth_m = value)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
